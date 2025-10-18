@@ -1,7 +1,6 @@
-import openai
 import os
 from collections import defaultdict
-from openai import OpenAI
+from my_llmcall import call_groq
 import json
 import Retrival_model
 import torch
@@ -157,46 +156,78 @@ def valid_fine_tuning(file_name):
         print("No errors found")
 
 
-def scoring_by_chatgpt(question, answer, grading_category):
-    os.environ["OPENAI_API_KEY"] = "..."
-    openai.api_key = os.environ["OPENAI_API_KEY"]
-    grading_rubric = dic_grading[grading_category]
-    client = OpenAI()
-    completion = client.chat.completions.create(
-        model="gpt-3.5-turbo",
-        messages=[
-            {"role": "system", "content": "You are a Agent fouce on grading the example for In-context learning, "
-                                          "if the given example is good for In-context learning, give the example a "
-                                          "high score, otherwise, a low score"},
-            {"role": "user", "content": f"Here is the rubrics for grading an example of In-context learning-{grading_rubric}. "
-                                        f"According to the rubric, for the Question-{question} and Answer-{answer}, "
-                                        f"give me a score of it if I want to use it as a prompt in In-context "
-                                        f"learning later. Give me a number between 0-100.For your answer, just give me "
-                                        f"the socre(a number), no other thing. "
-                                        f"Remember, the output you give to me can only be a number, no other words! "
-                                        f"If it is not a number, my whole project will be destoryed"}
-        ]
-    )
-    return completion.choices[0].message.content
+# def scoring_by_chatgpt(question, answer, grading_category):
+#     # 将问题、答案以及预先定义好的评分标准发送给chatgpt进行评分
+#     os.environ["OPENAI_API_KEY"] = "..."
+#     openai.api_key = os.environ["OPENAI_API_KEY"]
+#     grading_rubric = dic_grading[grading_category]
+#     client = OpenAI()
+#     completion = client.chat.completions.create(
+#         model="gpt-3.5-turbo",
+#         messages=[
+#             {"role": "system", "content": "You are a Agent fouce on grading the example for In-context learning, "
+#                                           "if the given example is good for In-context learning, give the example a "
+#                                           "high score, otherwise, a low score"},
+#             {"role": "user", "content": f"Here is the rubrics for grading an example of In-context learning-{grading_rubric}. "
+#                                         f"According to the rubric, for the Question-{question} and Answer-{answer}, "
+#                                         f"give me a score of it if I want to use it as a prompt in In-context "
+#                                         f"learning later. Give me a number between 0-100.For your answer, just give me "
+#                                         f"the socre(a number), no other thing. "
+#                                         f"Remember, the output you give to me can only be a number, no other words! "
+#                                         f"If it is not a number, my whole project will be destoryed"}
+#         ]
+#     )
+#     return completion.choices[0].message.content
 
+def scoring_by_chatgpt(question, answer, grading_category):
+    grading_rubric = dic_grading[grading_category]
+    messages=[
+        {"role": "system", "content": "You are a Agent fouce on grading the example for In-context learning, "
+                                        "if the given example is good for In-context learning, give the example a "
+                                        "high score, otherwise, a low score"},
+        {"role": "user", "content": f"Here is the rubrics for grading an example of In-context learning-{grading_rubric}. "
+                                    f"According to the rubric, for the Question-{question} and Answer-{answer}, "
+                                    f"give me a score of it if I want to use it as a prompt in In-context "
+                                    f"learning later. Give me a number between 0-100.For your answer, just give me "
+                                    f"the socre(a number), no other thing. "
+                                    f"Remember, the output you give to me can only be a number, no other words! "
+                                    f"If it is not a number, my whole project will be destoryed"}
+    ]
+    model="llama-3.1-8b-instant"
+    context = call_groq(messages, model)
+    if context is None:
+        raise ValueError("Agent_MS.py: Failed to get response from chatgpt")
+    return context
 
 def train_model_duringStore(question, answer, file_name):
+    # 模型微调
+    # 初始化模型和优化器
     model = Retrival_model.SentenceSimilarityModel()
     optimizer = Retrival_model.AdamW(model.parameters(), lr=5e-5)
     # Load the saved states
+    # 从磁盘加载之前训练好的模型和优化器参数
     Retrival_model.load_model_and_optimizer(model, optimizer, "model.pth", "optimizer.pth")
     #model = model.to(device)
+    # 加载数据集
+    # 从记忆库文件中读取所有历史问答对
     list1 = Retrival_model.allSentences(file_name)
+    # 把当前问题和答案拼成一个字符串，作为检索的query
     question_combine = f"{question}<->{answer}"
+    # 用BM25算法从历史问答中检索与当前问答最相关的若干条。
     list2 = Retrival_model.retrieval_first_BM25(question_combine, list1)
+    # 对检索结果进行打分和筛选，生成训练用的句子对和标签
     sentence_pairs, labels = Retrival_model.grade_and_select_forMemory(question_combine, list2)
+    
+    # 对模型进行微调
     Retrival_model.training_model(model, sentence_pairs, labels, optimizer, epochs=2)
+    # 保存模型参数
     Retrival_model.save_model_and_optimizer(model, optimizer, "model.pth", "optimizer.pth")
     #print("Single-memory train is done")
 
 
 # The item in the file is decrease according to the scores, there will be a score made by chatgpt in advance
 def message_store(question, answer, file_path, grading_category):
+    # 将分数大于50分的问答，存入记忆库
     score = scoring_by_chatgpt(question, answer, grading_category)
     try:
         score = int(score)  # Attempt to convert
@@ -213,7 +244,7 @@ def message_store(question, answer, file_path, grading_category):
             {"role": "assistant", "content": answer}
         ]
     }
-
+    # 用新样本对检索模型进行微调，提升后续检索能力
     train_model_duringStore(question, answer, file_path)
 
     try:

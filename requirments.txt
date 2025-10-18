@@ -1,7 +1,12 @@
-openai
+grop
 rank_bm25
 transformers
-pytorch
+torch
 tqdm
 rouge
 evaluate
+nltk
+absl-py
+rouge_score
+bert_score
+hf_xet

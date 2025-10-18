@@ -1,9 +1,9 @@
-import openai
 import os
-from openai import OpenAI
+from my_llmcall import call_groq
 import json
-from transformers import BertModel, BertTokenizer, AdamW
+from transformers import BertModel, BertTokenizer
 import torch
+from torch.optim import AdamW
 import torch.nn as nn
 from rouge import Rouge
 from evaluate import load
@@ -17,19 +17,29 @@ else:
 
 
 # get the answer from the chatgpt
-def chatgpt_answer(question, gpt_model="gpt-3.5-turbo"):
-    os.environ["OPENAI_API_KEY"] = "..."
-    openai.api_key = os.environ["OPENAI_API_KEY"]
+# def chatgpt_answer(question, gpt_model="gpt-3.5-turbo"):
+#     os.environ["OPENAI_API_KEY"] = "..."
+#     openai.api_key = os.environ["OPENAI_API_KEY"]
 
-    client = OpenAI()
-    completion = client.chat.completions.create(
-        model=gpt_model,
-        messages=[
+#     client = OpenAI()
+#     completion = client.chat.completions.create(
+#         model=gpt_model,
+#         messages=[
+#             {"role": "user", "content": question}
+#         ]
+#     )
+#     return completion.choices[0].message.content
+
+def chatgpt_answer(question, gpt_model="llama-3.1-8b-instant"):
+    messages=[
             {"role": "user", "content": question}
-        ]
-    )
-    return completion.choices[0].message.content
-
+    ]
+    context = call_groq(messages, gpt_model)
+    
+    if context is None:
+        exception_msg = f"No context found for question: {context}"
+        raise Exception(exception_msg)
+    return context
 
 # input all the previous memory, and format them in the way "question-answer", store them in a list
 def allSentences(memorybase_file_path):
@@ -144,6 +154,8 @@ def calculate_bertScores(generated_answers, standard_answers):
     bertscore = load("bertscore")
     results = bertscore.compute(predictions=generated_answers, references=standard_answers,
                                 model_type="microsoft/deberta-xlarge-mnli")
+    if results is None:
+        raise Exception("No BERTScore results found")
     return sum(results['precision'])/len(results['precision'])
 
 
@@ -177,7 +189,9 @@ def calculate_aggregated_rouge_score_withoutRetrieval(questions, standard_answer
         generated_answers.append(chatgpt_answer(final_question))
     # Calculate ROUGE scores for each generated-standard answer pair
     scores = [rouge.get_scores(gen_ans, std_ans)[0] for gen_ans, std_ans in zip(generated_answers, standard_answers)]
-
+    if scores is None:
+        raise Exception("No ROUGE scores found")
+    
     # Calculate the average of the F1 scores for ROUGE-1, ROUGE-2, and ROUGE-L across all answers
     avg_rouge_f1 = sum(score['rouge-1']['f'] + score['rouge-2']['f'] + score['rouge-l']['f'] for score in scores) / (
             3 * len(scores))
@@ -186,6 +200,8 @@ def calculate_aggregated_rouge_score_withoutRetrieval(questions, standard_answer
 
 
 def main(file_name, test_file):
+    # file_name 参数作为记忆池，用于检索和辅助生成答案
+    # test_file 参数作为测试集，用于计算评价指标
     all_sentences = allSentences(file_name)
     test_sentences = allSentences(test_file)
     questions = []
@@ -200,4 +216,4 @@ def main(file_name, test_file):
 
 
 if __name__ == '__main__':
-    main()
+    main("PlanPool.jsonl", "studyTest_reduce.jsonl")

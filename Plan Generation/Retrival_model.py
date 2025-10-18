@@ -1,13 +1,13 @@
-import openai
 import os
-from openai import OpenAI
 import json
 from rank_bm25 import BM25Okapi
-from transformers import BertModel, BertTokenizer, AdamW
+from transformers import BertModel, BertTokenizer
 import torch
+from torch.optim import AdamW
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
+from my_llmcall import call_groq
 
 if torch.cuda.is_available():
     device = torch.device("cuda")
@@ -16,19 +16,30 @@ else:
 
 
 # get the answer from the chatgpt
-def chatgpt_answer(question, gpt_model="gpt-3.5-turbo"):
-    os.environ["OPENAI_API_KEY"] = "..."
-    openai.api_key = os.environ["OPENAI_API_KEY"]
+# def chatgpt_answer(question, gpt_model="gpt-3.5-turbo"):
+#     os.environ["OPENAI_API_KEY"] = "..."
+#     openai.api_key = os.environ["OPENAI_API_KEY"]
 
-    client = OpenAI()
-    completion = client.chat.completions.create(
-        model=gpt_model,
-        messages=[
+#     client = OpenAI()
+#     completion = client.chat.completions.create(
+#         model=gpt_model,
+#         messages=[
+#             {"role": "user", "content": question}
+#         ]
+#     )
+#     return completion.choices[0].message.content
+
+# get the answer from the chatgpt
+def chatgpt_answer(question, gpt_model="llama-3.1-8b-instant"):
+    messages=[
             {"role": "user", "content": question}
-        ]
-    )
-    return completion.choices[0].message.content
-
+    ]
+    context = call_groq(messages, gpt_model)
+    
+    if context is None:
+        exception_msg = f"No context found for question: {context}"
+        raise Exception(exception_msg)
+    return context
 
 # input all the previous memory, and format them in the way "question-answer", store them in a list
 def allSentences(memorybase_file_path):
@@ -179,18 +190,26 @@ def training_model(model_l, new_sentence_pairs, new_labels, optimizer_r, epochs=
     model_l.train()
     for epoch in range(epochs):
         for batch in new_loader:
+            # 按批次加载训练数据
             optimizer_r.zero_grad()
+            # 清空优化器之前累计的梯度
             sentence_pairs_s = batch['sentence_pair']
             labels_s = batch['label']
+            # 从当前批次中取出句子和对应标签
             outputs, _ = model_l(sentence_pairs_s)
+            # 前向传播，得到相似度分数
             loss = criterion(outputs, labels_s)
+            # 计算损失值
             loss.backward()
+            # 反向传播，更新梯度
             optimizer_r.step()
-        #print(f"Epoch {epoch}, Loss: {loss.item()}")
+        print(f"Epoch {epoch}, Loss: {loss.item()}")
 
 
 def main(file_name):
+    # 读取数据所有句子
     all_sentences = allSentences(file_name)
+    # 初始化模型和优化器
     model = SentenceSimilarityModel()
     #model = model.to(device)
     optimizer = AdamW(model.parameters(), lr=5e-5)
@@ -198,16 +217,36 @@ def main(file_name):
     for x in tqdm(all_sentences):
         start = start + 1
         if start > 1:
+            # 对每次遍历都重新加载模型和优化器的最新参数
             model = SentenceSimilarityModel()
             optimizer = AdamW(model.parameters(), lr=5e-5)
             # Load the saved states
             load_model_and_optimizer(model, optimizer, "model.pth", "optimizer.pth")
             #model = model.to(device)
+        # 检索样本，构造训练数据，用BM25算法检索与当前问答对最相关的若干条历史问答
         first_list = retrieval_first_BM25(x, all_sentences)
+        # 用评分筛选出相关与不相关的样本
         sentence_pairs, labels = grade_and_select(x, first_list)
+        # 模型微调
         training_model(model, sentence_pairs, labels, optimizer, epochs=2)
+        # 保存模型和优化器参数
         save_model_and_optimizer(model, optimizer, "model.pth", "optimizer.pth")
 
 
 if __name__ == '__main__':
-    main()
+    main("studyTest.jsonl")
+
+    # if __name__ == '__main__':
+    # # 测试 allSentences
+    # test_list = allSentences("memorybase.jsonl")
+    # print(test_list[:2])  # 打印前两个样本
+
+    # # 测试检索
+    # bm25_results = retrieval_first_BM25(test_list[0], test_list)
+    # print(bm25_results)
+
+    # # 测试模型前向
+    # model = SentenceSimilarityModel()
+    # pairs = [(test_list[0], test_list[1]), (test_list[1], test_list[2])]
+    # outputs, embeddings = model(pairs)
+    # print(outputs)
