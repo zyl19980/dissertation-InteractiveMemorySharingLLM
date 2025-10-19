@@ -25,6 +25,3 @@ To evaluate the performance of agents under each domain, run the Integrate.py un
 - 重写requirements文件
 
 - 将openai的大模型调用，改为使用groq的api调用
-
-- 由于资源限制，将Evaluate.py中的模型类型由microsoft/deberta-xlarge-mnli修改为bert-base-uncased
-    
