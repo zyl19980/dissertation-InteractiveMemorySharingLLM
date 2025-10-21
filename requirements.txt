@@ -1,4 +1,4 @@
-grop
+groq
 rank_bm25
 transformers
 torch
